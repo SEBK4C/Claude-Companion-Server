@@ -1374,7 +1374,7 @@ export function createRoutes(
   registerFsRoutes(api);
   registerEnvRoutes(api, { webDir: WEB_DIR });
   registerSandboxRoutes(api);
-  registerServerRoutes(api);
+  registerServerRoutes(api, { terminalManager });
 
   registerPromptRoutes(api);
   registerSettingsRoutes(api);

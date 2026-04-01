@@ -15,6 +15,11 @@ import { Hono } from "hono";
 import * as serverManager from "../server-manager.js";
 import { registerServerRoutes } from "./server-routes.js";
 
+// ─── Mock terminal manager ────────────────────────────────────────────────
+const mockTerminalManager = {
+  spawnSsh: vi.fn(() => "term-1234"),
+};
+
 // ─── Test setup ────────────────────────────────────────────────────────────
 
 let app: Hono;
@@ -24,7 +29,7 @@ beforeEach(() => {
 
   app = new Hono();
   const api = new Hono();
-  registerServerRoutes(api);
+  registerServerRoutes(api, { terminalManager: mockTerminalManager as any });
   app.route("/api", api);
 });
 
@@ -306,5 +311,63 @@ describe("GET /api/servers/:slug/health", () => {
     expect(json.error).toBe("Connection refused");
 
     fetchSpy.mockRestore();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /api/servers/:slug/terminal — SSH terminal to a remote server
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("POST /api/servers/:slug/terminal", () => {
+  it("returns 404 when the server does not exist", async () => {
+    vi.mocked(serverManager.getServer).mockReturnValue(null);
+
+    const res = await app.request("/api/servers/missing/terminal", { method: "POST" });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("spawns an SSH terminal and returns the terminal ID", async () => {
+    // Validates that the endpoint calls spawnSsh with the correct user and hostname
+    const server = makeServer();
+    vi.mocked(serverManager.getServer).mockReturnValue(server as any);
+
+    const res = await app.request("/api/servers/test-server/terminal", { method: "POST" });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.terminalId).toBe("term-1234");
+    expect(mockTerminalManager.spawnSsh).toHaveBeenCalledWith("seb", "test");
+  });
+
+  it("returns 500 when spawnSsh throws", async () => {
+    const server = makeServer();
+    vi.mocked(serverManager.getServer).mockReturnValue(server as any);
+    mockTerminalManager.spawnSsh.mockImplementation(() => {
+      throw new Error("SSH binary not found");
+    });
+
+    const res = await app.request("/api/servers/test-server/terminal", { method: "POST" });
+
+    expect(res.status).toBe(500);
+    const json = await res.json();
+    expect(json.error).toBe("SSH binary not found");
+  });
+
+  it("returns 503 when terminal manager is not available", async () => {
+    // Test with a separate app instance that has no terminal manager
+    const appNoTerm = new Hono();
+    const apiNoTerm = new Hono();
+    registerServerRoutes(apiNoTerm); // no terminalManager option
+    appNoTerm.route("/api", apiNoTerm);
+
+    const server = makeServer();
+    vi.mocked(serverManager.getServer).mockReturnValue(server as any);
+
+    const res = await appNoTerm.request("/api/servers/test-server/terminal", { method: "POST" });
+
+    expect(res.status).toBe(503);
+    const json = await res.json();
+    expect(json.error).toMatch(/terminal manager/i);
   });
 });

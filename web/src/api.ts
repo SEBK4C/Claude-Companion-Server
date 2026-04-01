@@ -997,6 +997,8 @@ export const api = {
     get<ServerHealthResult>(`/servers/${encodeURIComponent(slug)}/health`),
   testServer: (slug: string) =>
     post<ServerTestResult>(`/servers/${encodeURIComponent(slug)}/test`),
+  openServerTerminal: (slug: string) =>
+    post<{ terminalId: string }>(`/servers/${encodeURIComponent(slug)}/terminal`),
 
   buildBaseImage: () =>
     post<{ ok: boolean; tag: string }>("/docker/build-base"),

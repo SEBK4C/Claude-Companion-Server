@@ -57,6 +57,8 @@ const worktreeTracker = new WorktreeTracker();
 const CONTAINER_STATE_PATH = join(COMPANION_HOME, "containers.json");
 const terminalManager = new TerminalManager();
 const noVncProxy = new NoVncProxy();
+import { WsProxyManager } from "./ws-proxy.js";
+const wsProxyManager = isLighthouseMode ? new WsProxyManager() : null;
 const prPoller = new PRPoller(wsBridge);
 const recorder = new RecorderManager();
 const cronScheduler = new CronScheduler(launcher, wsBridge);
@@ -288,7 +290,12 @@ const server = Bun.serve<SocketData>({
         wsBridge.handleCLIOpen(ws, data.sessionId);
         launcher.markConnected(data.sessionId);
       } else if (data.kind === "browser") {
-        wsBridge.handleBrowserOpen(ws, data.sessionId);
+        if (wsProxyManager) {
+          // Lighthouse mode: proxy to remote server
+          wsProxyManager.handleBrowserOpen(ws, data.sessionId);
+        } else {
+          wsBridge.handleBrowserOpen(ws, data.sessionId);
+        }
       } else if (data.kind === "terminal") {
         terminalManager.addBrowserSocket(ws);
       } else if (data.kind === "novnc") {
@@ -300,7 +307,11 @@ const server = Bun.serve<SocketData>({
       if (data.kind === "cli") {
         wsBridge.handleCLIMessage(ws, msg);
       } else if (data.kind === "browser") {
-        wsBridge.handleBrowserMessage(ws, msg);
+        if (wsProxyManager) {
+          wsProxyManager.handleBrowserMessage(ws, msg);
+        } else {
+          wsBridge.handleBrowserMessage(ws, msg);
+        }
       } else if (data.kind === "terminal") {
         terminalManager.handleBrowserMessage(ws, msg);
       } else if (data.kind === "novnc") {
@@ -313,7 +324,11 @@ const server = Bun.serve<SocketData>({
       if (data.kind === "cli") {
         wsBridge.handleCLIClose(ws);
       } else if (data.kind === "browser") {
-        wsBridge.handleBrowserClose(ws);
+        if (wsProxyManager) {
+          wsProxyManager.handleBrowserClose(ws);
+        } else {
+          wsBridge.handleBrowserClose(ws);
+        }
       } else if (data.kind === "terminal") {
         terminalManager.removeBrowserSocket(ws);
       } else if (data.kind === "novnc") {

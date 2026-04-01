@@ -1,7 +1,11 @@
 import type { Hono } from "hono";
 import * as serverManager from "../server-manager.js";
+import type { TerminalManager } from "../terminal-manager.js";
 
-export function registerServerRoutes(api: Hono): void {
+export function registerServerRoutes(
+  api: Hono,
+  options?: { terminalManager?: TerminalManager },
+): void {
   // ─── List all servers (redacted) ──────────────────────────────────────────
   api.get("/servers", (c) => {
     try {
@@ -155,5 +159,30 @@ export function registerServerRoutes(api: Hono): void {
 
     const allOk = results.http.ok && results.auth.ok;
     return c.json({ ok: allOk, ...results });
+  });
+
+  // ─── SSH terminal to a remote server ──────────────────────────────
+  api.post("/servers/:slug/terminal", (c) => {
+    const server = serverManager.getServer(c.req.param("slug"));
+    if (!server) return c.json({ error: "Server not found" }, 404);
+
+    const tm = options?.terminalManager;
+    if (!tm) {
+      return c.json({ error: "Terminal manager not available" }, 503);
+    }
+
+    // Spawn a local SSH process that connects to the remote server via Tailscale
+    try {
+      const terminalId = tm.spawnSsh(
+        server.sshUser,
+        server.tailscaleHostname,
+      );
+      return c.json({ terminalId });
+    } catch (e: unknown) {
+      return c.json(
+        { error: e instanceof Error ? e.message : String(e) },
+        500,
+      );
+    }
   });
 }
