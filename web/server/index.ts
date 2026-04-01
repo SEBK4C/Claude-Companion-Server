@@ -86,9 +86,14 @@ wsBridge.setStore(sessionStore);
 wsBridge.setRecorder(recorder);
 launcher.setStore(sessionStore);
 launcher.setRecorder(recorder);
-launcher.restoreFromDisk();
-wsBridge.restoreFromDisk();
-containerManager.restoreState(CONTAINER_STATE_PATH);
+
+if (isLighthouseMode) {
+  console.log("[server] Lighthouse mode: skipping local CLI/session restoration");
+} else {
+  launcher.restoreFromDisk();
+  wsBridge.restoreFromDisk();
+  containerManager.restoreState(CONTAINER_STATE_PATH);
+}
 
 // ── Session orchestrator — centralizes lifecycle event wiring ────────────────
 orchestrator.initialize();
@@ -108,11 +113,14 @@ const app = new Hono();
 
 // ── Health endpoint — always unauthenticated (used by Fly.io + control plane) ─
 const startTime = Date.now();
+import { isLighthouseMode } from "./lighthouse.js";
+
 app.get("/health", (c) => {
   return c.json({
     ok: true,
     uptime: Math.floor((Date.now() - startTime) / 1000),
-    sessions: launcher.listSessions().length,
+    sessions: isLighthouseMode ? 0 : launcher.listSessions().length,
+    ...(isLighthouseMode ? { mode: "lighthouse" } : {}),
   });
 });
 
@@ -316,6 +324,9 @@ const server = Bun.serve<SocketData>({
 });
 
 const authToken = getToken();
+if (isLighthouseMode) {
+  console.log(`[server] LIGHTHOUSE MODE — proxying to remote servers`);
+}
 console.log(`Server running on http://${host}:${server.port}`);
 console.log();
 console.log(`  Auth token: ${authToken}`);
@@ -331,15 +342,21 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 // ── Cron scheduler ──────────────────────────────────────────────────────────
-cronScheduler.startAll();
+if (!isLighthouseMode) {
+  cronScheduler.startAll();
+}
 
 // ── Agent system ────────────────────────────────────────────────────────────
-migrateCronJobsToAgents();
-migrateLinearCredentialsToAgents();
-agentExecutor.startAll();
+if (!isLighthouseMode) {
+  migrateCronJobsToAgents();
+  migrateLinearCredentialsToAgents();
+  agentExecutor.startAll();
+}
 
 // ── Image pull manager — pre-pull missing Docker images for environments ────
-imagePullManager.initFromEnvironments();
+if (!isLighthouseMode) {
+  imagePullManager.initFromEnvironments();
+}
 
 // ── Tailscale Funnel restoration ────────────────────────────────────────────
 restoreTailscaleFunnel(port).catch((err) => {
