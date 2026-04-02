@@ -96,53 +96,21 @@ Note each worker's Tailscale hostname (e.g. `server-pve.tailnet-name.ts.net`).
 
 ### Step 2: Set up the Lighthouse
 
-On the machine that will be your single UI entry point (e.g. an LXC container):
+On the machine that will be your single UI entry point (e.g. an LXC container), run the one-line installer:
 
 ```bash
-# Install Bun
-curl -fsSL https://bun.sh/install | bash
-source ~/.bashrc
-
-# Install from the multi-server branch (until merged to main)
-git clone -b feat/multi-server-registry https://github.com/SEBK4C/Claude-Companion-Server.git /opt/companion
-cd /opt/companion/web
-bun install
-bun run build
+curl -fsSL https://raw.githubusercontent.com/SEBK4C/Claude-Companion-Server/feat/multi-server-registry/scripts/install-lighthouse.sh | bash
 ```
 
-Create the systemd service with the `COMPANION_LIGHTHOUSE=1` flag:
+This installs all dependencies (git, unzip, Bun), clones the repo, builds, and sets up a systemd service with `COMPANION_LIGHTHOUSE=1`. The script prints the auth token and URL when done.
+
+To customize the port:
 
 ```bash
-cat > /etc/systemd/system/the-companion.service << 'EOF'
-[Unit]
-Description=The Companion (Lighthouse)
-After=network.target
-
-[Service]
-Type=simple
-Environment=NODE_ENV=production
-Environment=PORT=3456
-Environment=COMPANION_LIGHTHOUSE=1
-Environment=HOME=/root
-ExecStart=/root/.bun/bin/bun /opt/companion/web/dist/server/index.js
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable the-companion
-systemctl start the-companion
+COMPANION_PORT=8080 curl -fsSL https://raw.githubusercontent.com/SEBK4C/Claude-Companion-Server/feat/multi-server-registry/scripts/install-lighthouse.sh | bash
 ```
 
-Verify it's running:
-
-```bash
-curl http://localhost:3456/health
-# Returns: {"ok":true,"uptime":...,"sessions":0,"mode":"lighthouse"}
-```
+To update an existing installation, just run the installer again — it pulls the latest code and restarts.
 
 ### Step 3: Register worker servers
 
