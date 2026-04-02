@@ -3,8 +3,8 @@
 </p>
 
 <h1 align="center">The Companion</h1>
-<p align="center"><strong>Web UI for Claude Code and Codex sessions.</strong></p>
-<p align="center">Run multiple agents, inspect every tool call, and gate risky actions with explicit approvals.</p>
+<p align="center"><strong>Web UI for Claude Code and Codex sessions — single instance or multi-server.</strong></p>
+<p align="center">Run multiple agents across multiple machines, inspect every tool call, and gate risky actions with explicit approvals.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/the-companion"><img src="https://img.shields.io/npm/v/the-companion.svg" alt="npm version" /></a>
@@ -38,6 +38,168 @@ the-companion start
 
 Open [http://localhost:3456](http://localhost:3456). The server runs in the background and survives reboots.
 
+## Why this is useful
+- **Parallel sessions**: work on multiple tasks without juggling terminals.
+- **Multi-server federation**: manage Claude Code sessions across multiple machines from a single UI.
+- **Full visibility**: see streaming output, tool calls, and tool results in one timeline.
+- **Permission control**: approve/deny sensitive operations from the UI — with cross-server notifications.
+- **Session recovery**: restore work after process/server restarts.
+- **Dual-engine support**: designed for both Claude Code and Codex-backed flows.
+- **SSH terminals**: open a terminal to any remote server directly from the browser.
+
+## Single server vs. multi-server
+
+The Companion works in two modes:
+
+### Single server (default)
+One machine runs the Companion and spawns Claude Code processes locally. This is the standard setup — just `bunx the-companion` and go.
+
+### Multi-server (Lighthouse mode)
+A hub-and-spoke architecture where one **Lighthouse** server acts as a proxy UI, forwarding sessions to multiple **worker** servers. All traffic flows through Tailscale.
+
+```text
+Browser
+  |
+  v
+Lighthouse (proxy, no local CLI)
+  |-- Tailscale --> Worker: server-PVE (root)
+  |-- Tailscale --> Worker: server-LLM-GPU (seb)
+  '-- Tailscale --> Worker: MacminiM4 (seb)
+```
+
+Each worker runs the Companion as a standard service. The Lighthouse doesn't spawn CLI processes itself — it proxies REST and WebSocket traffic to the workers.
+
+## Multi-server setup guide
+
+### Prerequisites
+- [Tailscale](https://tailscale.com) installed on all machines (Lighthouse + workers)
+- [Bun](https://bun.sh) installed on all machines
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed on each **worker** (not needed on the Lighthouse)
+
+### Step 1: Set up worker servers
+
+On each machine that will run Claude Code sessions, install and start the Companion normally:
+
+```bash
+bun install -g the-companion
+the-companion install
+the-companion start
+```
+
+Grab the auth token from each worker — you'll need it for the Lighthouse config:
+
+```bash
+cat ~/.companion/auth.json
+```
+
+Note each worker's Tailscale hostname (e.g. `server-pve.tailnet-name.ts.net`).
+
+### Step 2: Set up the Lighthouse
+
+On the machine that will be your single UI entry point (e.g. an LXC container):
+
+```bash
+# Install Bun
+curl -fsSL https://bun.sh/install | bash
+source ~/.bashrc
+
+# Install from the multi-server branch (until merged to main)
+git clone -b feat/multi-server-registry https://github.com/SEBK4C/Claude-Companion-Server.git /opt/companion
+cd /opt/companion/web
+bun install
+bun run build
+```
+
+Create the systemd service with the `COMPANION_LIGHTHOUSE=1` flag:
+
+```bash
+cat > /etc/systemd/system/the-companion.service << 'EOF'
+[Unit]
+Description=The Companion (Lighthouse)
+After=network.target
+
+[Service]
+Type=simple
+Environment=NODE_ENV=production
+Environment=PORT=3456
+Environment=COMPANION_LIGHTHOUSE=1
+Environment=HOME=/root
+ExecStart=/root/.bun/bin/bun /opt/companion/web/dist/server/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable the-companion
+systemctl start the-companion
+```
+
+Verify it's running:
+
+```bash
+curl http://localhost:3456/health
+# Returns: {"ok":true,"uptime":...,"sessions":0,"mode":"lighthouse"}
+```
+
+### Step 3: Register worker servers
+
+Open the Lighthouse UI in your browser:
+
+```
+http://<lighthouse-tailscale-hostname>:3456
+```
+
+Navigate to **Servers** (`#/servers`) in the sidebar and add each worker:
+
+| Field | Example |
+|---|---|
+| Name | PVE Server |
+| URL | `http://server-pve.tailnet-name.ts.net:3456` |
+| Auth Token | *(paste from worker's `~/.companion/auth.json`)* |
+| SSH User | root |
+| Tailscale Hostname | server-pve |
+
+Repeat for each worker. The health indicator will show green when connectivity is confirmed.
+
+### Step 4: Use it
+
+- **Create sessions**: on the HomePage, pick which server to run on using the server dropdown
+- **Unified sidebar**: all sessions from all servers appear in one list with colored server badges
+- **Permissions**: notifications work across all servers — approve/deny from anywhere
+- **SSH terminals**: open a terminal to any server via **Servers > Terminal**
+
+## Architecture
+
+### Single server
+```text
+Browser (React)
+  <-> ws://localhost:3456/ws/browser/:session
+Companion server (Bun + Hono)
+  <-> ws://localhost:3456/ws/cli/:session
+Claude Code / Codex CLI
+```
+
+### Multi-server (Lighthouse mode)
+```text
+Browser (React)
+  <-> ws://lighthouse:3456/ws/browser/:session
+Lighthouse (Bun + Hono, COMPANION_LIGHTHOUSE=1)
+  <-> ws://worker:3456/ws/browser/:session   (proxied)
+Worker Companion server
+  <-> ws://worker:3456/ws/cli/:session
+Claude Code / Codex CLI
+```
+
+The Lighthouse proxies:
+- **REST**: session create/list/kill and all `/api/sessions/:id/*` routes
+- **WebSocket**: bidirectional message piping with auto-reconnect (3 attempts, exponential backoff)
+- **SSH**: spawns local `ssh -t user@hostname` via PTY for in-browser terminals
+
+The bridge uses the CLI `--sdk-url` websocket path and NDJSON events.
+
 ## CLI commands
 
 | Command | Description |
@@ -54,28 +216,17 @@ Open [http://localhost:3456](http://localhost:3456). The server runs in the back
 
 **Options:** `--port <n>` overrides the default port (3456).
 
-## Why this is useful
-- **Parallel sessions**: work on multiple tasks without juggling terminals.
-- **Full visibility**: see streaming output, tool calls, and tool results in one timeline.
-- **Permission control**: approve/deny sensitive operations from the UI.
-- **Session recovery**: restore work after process/server restarts.
-- **Dual-engine support**: designed for both Claude Code and Codex-backed flows.
+## Environment variables
 
-## Screenshots
-| Chat + tool timeline | Permission flow |
-|---|---|
-| <img src="screenshot.png" alt="Main workspace" width="100%" /> | <img src="web/docs/screenshots/notification-section.png" alt="Permission and notifications" width="100%" /> |
-
-## Architecture (simple)
-```text
-Browser (React)
-  <-> ws://localhost:3456/ws/browser/:session
-Companion server (Bun + Hono)
-  <-> ws://localhost:3456/ws/cli/:session
-Claude Code / Codex CLI
-```
-
-The bridge uses the CLI `--sdk-url` websocket path and NDJSON events.
+| Variable | Description | Default |
+|---|---|---|
+| `COMPANION_LIGHTHOUSE` | Set to `1` to enable lighthouse (proxy-only) mode | `0` |
+| `COMPANION_AUTH_TOKEN` | Override the auto-generated auth token | *(auto-generated)* |
+| `PORT` | Server port | `3456` |
+| `HOST` | Bind address | `0.0.0.0` |
+| `COMPANION_SESSION_DIR` | Session persistence directory | `$TMPDIR/vibe-sessions` |
+| `COMPANION_RECORD` | Enable protocol recording | `1` |
+| `COMPANION_RECORDINGS_DIR` | Recording storage directory | `~/.companion/recordings` |
 
 ## Authentication
 
@@ -94,6 +245,13 @@ Or set a token via environment variable (takes priority over the file):
 ```bash
 COMPANION_AUTH_TOKEN="my-secret-token" bunx the-companion
 ```
+
+In multi-server mode, each worker has its own token. The Lighthouse stores worker tokens in its server registry (`~/.companion/servers/`).
+
+## Screenshots
+| Chat + tool timeline | Permission flow |
+|---|---|
+| <img src="screenshot.png" alt="Main workspace" width="100%" /> | <img src="web/docs/screenshots/notification-section.png" alt="Permission and notifications" width="100%" /> |
 
 ## Development
 ```bash
