@@ -224,6 +224,7 @@ export interface CreateSessionOpts {
   backend?: "claude" | "codex";
   sandboxEnabled?: boolean;
   sandboxSlug?: string;
+  serverSlug?: string;
   container?: ContainerCreateOpts;
   resumeSessionAt?: string;
   forkSession?: boolean;
@@ -321,6 +322,52 @@ export interface CompanionSandbox {
   initScript?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface CompanionServer {
+  name: string;
+  slug: string;
+  url: string;
+  authToken: string; // redacted in API responses
+  sshUser: string;
+  tailscaleHostname: string;
+  description?: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ServerCreateFields {
+  name: string;
+  url: string;
+  authToken: string;
+  sshUser: string;
+  tailscaleHostname: string;
+  description?: string;
+  enabled?: boolean;
+}
+
+export interface ServerUpdateFields {
+  name?: string;
+  url?: string;
+  authToken?: string;
+  sshUser?: string;
+  tailscaleHostname?: string;
+  description?: string;
+  enabled?: boolean;
+}
+
+export interface ServerHealthResult {
+  ok: boolean;
+  latencyMs: number;
+  error?: string;
+  remote?: Record<string, unknown>;
+}
+
+export interface ServerTestResult {
+  ok: boolean;
+  http: { ok: boolean; latencyMs: number; error?: string };
+  auth: { ok: boolean; error?: string };
 }
 
 export interface ImagePullState {
@@ -936,6 +983,23 @@ export const api = {
       `/sandboxes/${encodeURIComponent(slug)}/test-init`,
       { cwd, initScript },
     ),
+
+  // Servers (multi-server federation)
+  listServers: () => get<CompanionServer[]>("/servers"),
+  getServer: (slug: string) =>
+    get<CompanionServer>(`/servers/${encodeURIComponent(slug)}`),
+  createServer: (fields: ServerCreateFields) =>
+    post<CompanionServer>("/servers", fields),
+  updateServer: (slug: string, data: ServerUpdateFields) =>
+    put<CompanionServer>(`/servers/${encodeURIComponent(slug)}`, data),
+  deleteServer: (slug: string) =>
+    del(`/servers/${encodeURIComponent(slug)}`),
+  healthCheckServer: (slug: string) =>
+    get<ServerHealthResult>(`/servers/${encodeURIComponent(slug)}/health`),
+  testServer: (slug: string) =>
+    post<ServerTestResult>(`/servers/${encodeURIComponent(slug)}/test`),
+  openServerTerminal: (slug: string) =>
+    post<{ terminalId: string }>(`/servers/${encodeURIComponent(slug)}/terminal`),
 
   buildBaseImage: () =>
     post<{ ok: boolean; tag: string }>("/docker/build-base"),

@@ -28,6 +28,9 @@ import { registerSettingsRoutes } from "./routes/settings-routes.js";
 import { registerTailscaleRoutes } from "./routes/tailscale-routes.js";
 import { registerGitRoutes } from "./routes/git-routes.js";
 import { registerSystemRoutes } from "./routes/system-routes.js";
+import { registerServerRoutes } from "./routes/server-routes.js";
+import { isLighthouseMode } from "./lighthouse.js";
+import * as lighthouseProxy from "./lighthouse-proxy.js";
 import { isRecordingHubEnabled } from "./recording-hub/hub-config.js";
 import { registerHubRoutes } from "./recording-hub/hub-routes.js";
 import { registerLinearRoutes, fetchLinearTeamStates } from "./routes/linear-routes.js";
@@ -184,6 +187,17 @@ export function createRoutes(
 
   api.post("/sessions/create", async (c) => {
     const body = await c.req.json().catch(() => ({}));
+
+    // Lighthouse mode: proxy to remote server
+    if (isLighthouseMode) {
+      const serverSlug = body.serverSlug;
+      if (!serverSlug) {
+        return c.json({ error: "Lighthouse mode: serverSlug is required" }, 400);
+      }
+      const res = await lighthouseProxy.proxyCreateSession(serverSlug, body);
+      return new Response(res.body, { status: res.status, headers: res.headers });
+    }
+
     const result = await orchestrator.createSession(body);
     if (!result.ok) {
       return c.json({ error: result.error }, result.status as any);
@@ -195,6 +209,63 @@ export function createRoutes(
 
   api.post("/sessions/create-stream", async (c) => {
     const body = await c.req.json().catch(() => ({}));
+
+    // Lighthouse mode: proxy SSE stream from remote server
+    if (isLighthouseMode) {
+      const serverSlug = body.serverSlug;
+      if (!serverSlug) {
+        return c.json({ error: "Lighthouse mode: serverSlug is required" }, 400);
+      }
+      const res = await lighthouseProxy.proxyCreateSessionStream(serverSlug, body);
+      // If it's an error response (not SSE), return directly
+      if (res.status !== 200) {
+        return new Response(res.body, { status: res.status, headers: res.headers });
+      }
+      // Wrap the SSE stream: intercept the "done" event to register the session
+      return streamSSE(c, async (stream) => {
+        if (!res.body) return;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            // Process complete SSE messages from buffer
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? ""; // Keep incomplete line in buffer
+            let currentEvent = "";
+            let currentData = "";
+            for (const line of lines) {
+              if (line.startsWith("event:")) {
+                currentEvent = line.slice(6).trim();
+              } else if (line.startsWith("data:")) {
+                currentData = line.slice(5).trim();
+              } else if (line === "" && currentEvent) {
+                // Empty line = end of SSE message, forward it
+                if (currentEvent === "done") {
+                  // Register the session in our mapping
+                  try {
+                    const parsed = JSON.parse(currentData);
+                    if (parsed.sessionId) {
+                      lighthouseProxy.registerSession(parsed.sessionId, serverSlug);
+                      // Enrich with serverSlug
+                      currentData = JSON.stringify({ ...parsed, serverSlug });
+                    }
+                  } catch { /* forward as-is */ }
+                }
+                await stream.writeSSE({ event: currentEvent, data: currentData });
+                currentEvent = "";
+                currentData = "";
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      });
+    }
 
     return streamSSE(c, async (stream) => {
       const result = await orchestrator.createSessionStreaming(
@@ -229,7 +300,17 @@ export function createRoutes(
     });
   });
 
-  api.get("/sessions", (c) => {
+  api.get("/sessions", async (c) => {
+    // Lighthouse mode: aggregate from all remote servers
+    if (isLighthouseMode) {
+      const { sessions, errors } = await lighthouseProxy.aggregateSessionListing();
+      // Return sessions with errors array in a header for the frontend to check
+      if (errors.length > 0) {
+        c.header("X-Lighthouse-Errors", JSON.stringify(errors));
+      }
+      return c.json(sessions);
+    }
+
     const sessions = launcher.listSessions();
     const names = sessionNames.getAllNames();
     const bridgeStates = wsBridge.getAllSessions();
@@ -252,12 +333,67 @@ export function createRoutes(
     return c.json(enriched);
   });
 
-  api.get("/sessions/:id", (c) => {
+  api.get("/sessions/:id", async (c) => {
     const id = c.req.param("id");
+
+    // Lighthouse mode: proxy to the remote server that owns this session
+    if (isLighthouseMode) {
+      const res = await lighthouseProxy.proxySessionRequest(
+        id,
+        `/api/sessions/${id}`,
+        { method: "GET" },
+      );
+      return new Response(res.body, { status: res.status, headers: res.headers });
+    }
+
     const session = launcher.getSession(id);
     if (!session) return c.json({ error: "Session not found" }, 404);
     return c.json(session);
   });
+
+  // ─── Lighthouse proxy middleware for session operations ─────────────
+  // In lighthouse mode, intercept all /sessions/:id/* routes that aren't
+  // explicitly handled above and forward them to the remote server.
+  if (isLighthouseMode) {
+    api.all("/sessions/:id/*", async (c) => {
+      const id = c.req.param("id");
+      const fullPath = new URL(c.req.url).pathname;
+      // Strip the /api prefix if present, to reconstruct the remote path
+      const apiPath = fullPath.startsWith("/api")
+        ? fullPath
+        : `/api${fullPath}`;
+
+      const init: RequestInit = {
+        method: c.req.method,
+      };
+
+      // Forward request body for non-GET methods
+      if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+        const contentType = c.req.header("content-type");
+        if (contentType?.includes("application/json")) {
+          const body = await c.req.json().catch(() => ({}));
+          init.body = JSON.stringify(body);
+          init.headers = { "Content-Type": "application/json" };
+        }
+      }
+
+      const res = await lighthouseProxy.proxySessionRequest(id, apiPath, init);
+      return new Response(res.body, { status: res.status, headers: res.headers });
+    });
+
+    // Also proxy DELETE /sessions/:id (no wildcard)
+    api.delete("/sessions/:id", async (c) => {
+      const id = c.req.param("id");
+      const res = await lighthouseProxy.proxySessionRequest(
+        id,
+        `/api/sessions/${id}`,
+        { method: "DELETE" },
+      );
+      // Remove from our mapping on successful delete
+      if (res.ok) lighthouseProxy.unregisterSession(id);
+      return new Response(res.body, { status: res.status, headers: res.headers });
+    });
+  }
 
   api.get("/claude/sessions/discover", (c) => {
     const limitRaw = c.req.query("limit");
@@ -1238,6 +1374,7 @@ export function createRoutes(
   registerFsRoutes(api);
   registerEnvRoutes(api, { webDir: WEB_DIR });
   registerSandboxRoutes(api);
+  registerServerRoutes(api, { terminalManager });
 
   registerPromptRoutes(api);
   registerSettingsRoutes(api);

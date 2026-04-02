@@ -87,6 +87,14 @@ const NAV_ITEMS: NavItem[] = [
     activePages: ["sandboxes"],
   },
   {
+    id: "servers",
+    label: "Servers",
+    hash: "#/servers",
+    viewBox: "0 0 16 16",
+    iconPath: "M2 4a2 2 0 012-2h8a2 2 0 012 2v1H2V4zm0 2.5h12V8H2V6.5zm0 3h12v1.5a2 2 0 01-2 2H4a2 2 0 01-2-2V9.5zm9-5a.5.5 0 11-1 0 .5.5 0 011 0zm1.5 0a.5.5 0 11-1 0 .5.5 0 011 0zm-1.5 3a.5.5 0 11-1 0 .5.5 0 011 0zm1.5 0a.5.5 0 11-1 0 .5.5 0 011 0zm-1.5 3a.5.5 0 11-1 0 .5.5 0 011 0zm1.5 0a.5.5 0 11-1 0 .5.5 0 011 0z",
+    activePages: ["servers"],
+  },
+  {
     id: "agents",
     label: "Agents",
     hash: "#/agents",
@@ -114,7 +122,7 @@ const NAV_ITEMS: NavItem[] = [
 
 const NAV_SECTIONS = [
   { id: "workbench", label: "Workbench", itemIds: ["prompts", "integrations", "terminal"] },
-  { id: "workspace", label: "Workspace", itemIds: ["environments", "sandboxes", "agents", "settings"] },
+  { id: "workspace", label: "Workspace", itemIds: ["environments", "sandboxes", "servers", "agents", "settings"] },
 ] as const;
 
 const NAV_ITEMS_BY_ID = new Map(NAV_ITEMS.map((item) => [item.id, item]));
@@ -460,6 +468,8 @@ export function Sidebar() {
       cronJobName: bridgeState?.cronJobName || sdkInfo?.cronJobName,
       agentId: bridgeState?.agentId || sdkInfo?.agentId,
       agentName: bridgeState?.agentName || sdkInfo?.agentName,
+      serverSlug: sdkInfo?.serverSlug || "",
+      serverName: sdkInfo?.serverName || "",
     };
   }).sort((a, b) => b.createdAt - a.createdAt);
 

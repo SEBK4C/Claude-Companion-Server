@@ -57,6 +57,8 @@ const worktreeTracker = new WorktreeTracker();
 const CONTAINER_STATE_PATH = join(COMPANION_HOME, "containers.json");
 const terminalManager = new TerminalManager();
 const noVncProxy = new NoVncProxy();
+import { WsProxyManager } from "./ws-proxy.js";
+const wsProxyManager = isLighthouseMode ? new WsProxyManager() : null;
 const prPoller = new PRPoller(wsBridge);
 const recorder = new RecorderManager();
 const cronScheduler = new CronScheduler(launcher, wsBridge);
@@ -86,9 +88,14 @@ wsBridge.setStore(sessionStore);
 wsBridge.setRecorder(recorder);
 launcher.setStore(sessionStore);
 launcher.setRecorder(recorder);
-launcher.restoreFromDisk();
-wsBridge.restoreFromDisk();
-containerManager.restoreState(CONTAINER_STATE_PATH);
+
+if (isLighthouseMode) {
+  console.log("[server] Lighthouse mode: skipping local CLI/session restoration");
+} else {
+  launcher.restoreFromDisk();
+  wsBridge.restoreFromDisk();
+  containerManager.restoreState(CONTAINER_STATE_PATH);
+}
 
 // ── Session orchestrator — centralizes lifecycle event wiring ────────────────
 orchestrator.initialize();
@@ -108,11 +115,14 @@ const app = new Hono();
 
 // ── Health endpoint — always unauthenticated (used by Fly.io + control plane) ─
 const startTime = Date.now();
+import { isLighthouseMode } from "./lighthouse.js";
+
 app.get("/health", (c) => {
   return c.json({
     ok: true,
     uptime: Math.floor((Date.now() - startTime) / 1000),
-    sessions: launcher.listSessions().length,
+    sessions: isLighthouseMode ? 0 : launcher.listSessions().length,
+    ...(isLighthouseMode ? { mode: "lighthouse" } : {}),
   });
 });
 
@@ -280,7 +290,12 @@ const server = Bun.serve<SocketData>({
         wsBridge.handleCLIOpen(ws, data.sessionId);
         launcher.markConnected(data.sessionId);
       } else if (data.kind === "browser") {
-        wsBridge.handleBrowserOpen(ws, data.sessionId);
+        if (wsProxyManager) {
+          // Lighthouse mode: proxy to remote server
+          wsProxyManager.handleBrowserOpen(ws, data.sessionId);
+        } else {
+          wsBridge.handleBrowserOpen(ws, data.sessionId);
+        }
       } else if (data.kind === "terminal") {
         terminalManager.addBrowserSocket(ws);
       } else if (data.kind === "novnc") {
@@ -292,7 +307,11 @@ const server = Bun.serve<SocketData>({
       if (data.kind === "cli") {
         wsBridge.handleCLIMessage(ws, msg);
       } else if (data.kind === "browser") {
-        wsBridge.handleBrowserMessage(ws, msg);
+        if (wsProxyManager) {
+          wsProxyManager.handleBrowserMessage(ws, msg);
+        } else {
+          wsBridge.handleBrowserMessage(ws, msg);
+        }
       } else if (data.kind === "terminal") {
         terminalManager.handleBrowserMessage(ws, msg);
       } else if (data.kind === "novnc") {
@@ -305,7 +324,11 @@ const server = Bun.serve<SocketData>({
       if (data.kind === "cli") {
         wsBridge.handleCLIClose(ws);
       } else if (data.kind === "browser") {
-        wsBridge.handleBrowserClose(ws);
+        if (wsProxyManager) {
+          wsProxyManager.handleBrowserClose(ws);
+        } else {
+          wsBridge.handleBrowserClose(ws);
+        }
       } else if (data.kind === "terminal") {
         terminalManager.removeBrowserSocket(ws);
       } else if (data.kind === "novnc") {
@@ -316,6 +339,9 @@ const server = Bun.serve<SocketData>({
 });
 
 const authToken = getToken();
+if (isLighthouseMode) {
+  console.log(`[server] LIGHTHOUSE MODE — proxying to remote servers`);
+}
 console.log(`Server running on http://${host}:${server.port}`);
 console.log();
 console.log(`  Auth token: ${authToken}`);
@@ -331,15 +357,21 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 // ── Cron scheduler ──────────────────────────────────────────────────────────
-cronScheduler.startAll();
+if (!isLighthouseMode) {
+  cronScheduler.startAll();
+}
 
 // ── Agent system ────────────────────────────────────────────────────────────
-migrateCronJobsToAgents();
-migrateLinearCredentialsToAgents();
-agentExecutor.startAll();
+if (!isLighthouseMode) {
+  migrateCronJobsToAgents();
+  migrateLinearCredentialsToAgents();
+  agentExecutor.startAll();
+}
 
 // ── Image pull manager — pre-pull missing Docker images for environments ────
-imagePullManager.initFromEnvironments();
+if (!isLighthouseMode) {
+  imagePullManager.initFromEnvironments();
+}
 
 // ── Tailscale Funnel restoration ────────────────────────────────────────────
 restoreTailscaleFunnel(port).catch((err) => {

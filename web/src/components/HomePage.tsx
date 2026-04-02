@@ -6,6 +6,7 @@ import {
   type ClaudeDiscoveredSession,
   type CompanionEnv,
   type CompanionSandbox,
+  type CompanionServer,
   type GitRepoInfo,
   type GitBranchInfo,
   type BackendInfo,
@@ -130,6 +131,12 @@ export function HomePage() {
   const [showSandboxDropdown, setShowSandboxDropdown] = useState(false);
   const sandboxDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Server state (multi-server federation)
+  const [servers, setServers] = useState<CompanionServer[]>([]);
+  const [selectedServer, setSelectedServer] = useState(() => localStorage.getItem("cc-selected-server") || "");
+  const [showServerDropdown, setShowServerDropdown] = useState(false);
+  const serverDropdownRef = useRef<HTMLDivElement>(null);
+
   // Sandbox image readiness
   const [sandboxImageState, setSandboxImageState] = useState<ImagePullState | null>(null);
   const sandboxImagePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -204,6 +211,7 @@ export function HomePage() {
     }).catch(() => {});
     api.listEnvs().then(setEnvs).catch(() => {});
     api.listSandboxes().then(setSandboxes).catch(() => {});
+    api.listServers().then(setServers).catch(() => {});
     api.getBackends().then(setBackends).catch(() => {});
     api.getSettings().then((s) => {
       setLinearConfigured(s.linearApiKeyConfigured);
@@ -300,6 +308,9 @@ export function HomePage() {
       }
       if (sandboxDropdownRef.current && !sandboxDropdownRef.current.contains(e.target as Node)) {
         setShowSandboxDropdown(false);
+      }
+      if (serverDropdownRef.current && !serverDropdownRef.current.contains(e.target as Node)) {
+        setShowServerDropdown(false);
       }
     }
     document.addEventListener("pointerdown", handleClick);
@@ -629,6 +640,7 @@ export function HomePage() {
           permissionMode: mode,
           cwd: effectiveCwd || undefined,
           envSlug: selectedEnv || undefined,
+          serverSlug: selectedServer || undefined,
           sandboxEnabled: sandboxEnabled ? true : undefined,
           sandboxSlug: sandboxEnabled && selectedSandbox ? selectedSandbox : undefined,
           branch: effectiveBranch,
@@ -976,28 +988,114 @@ export function HomePage() {
               )}
             </div>
 
+            {/* Server selector (multi-server federation) */}
+            {servers.length > 0 && (
+              <>
+                <span className="w-0.5 h-0.5 rounded-full bg-cc-muted/30 mx-0.5 hidden sm:block" />
+                <div className="relative" ref={serverDropdownRef}>
+                  <button
+                    onClick={() => {
+                      if (!showServerDropdown) {
+                        api.listServers().then(setServers).catch(() => {});
+                      }
+                      setShowServerDropdown(!showServerDropdown);
+                    }}
+                    aria-expanded={showServerDropdown}
+                    className="flex items-center gap-1 px-2 py-1 text-[11px] sm:text-xs text-cc-muted hover:text-cc-fg rounded-lg hover:bg-cc-hover transition-colors cursor-pointer"
+                  >
+                    <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 opacity-50">
+                      <path d="M2 4a2 2 0 012-2h8a2 2 0 012 2v1H2V4zm0 2.5h12V8H2V6.5zm0 3h12v1.5a2 2 0 01-2 2H4a2 2 0 01-2-2V9.5z" />
+                    </svg>
+                    <span className="max-w-[80px] sm:max-w-[100px] truncate">
+                      {selectedServer ? servers.find((s) => s.slug === selectedServer)?.name || "Server" : "Local"}
+                    </span>
+                  </button>
+                  {showServerDropdown && (
+                    <div className="absolute left-0 bottom-full mb-1 w-56 bg-cc-card border border-cc-border rounded-[10px] shadow-lg z-10 py-1 overflow-hidden">
+                      <button
+                        onClick={() => {
+                          setSelectedServer("");
+                          localStorage.setItem("cc-selected-server", "");
+                          setShowServerDropdown(false);
+                        }}
+                        className={`w-full px-3 py-2 text-xs text-left hover:bg-cc-hover transition-colors cursor-pointer ${
+                          !selectedServer ? "text-cc-primary font-medium" : "text-cc-fg"
+                        }`}
+                      >
+                        Local
+                      </button>
+                      {servers.filter((s) => s.enabled).map((server) => (
+                        <button
+                          key={server.slug}
+                          onClick={() => {
+                            setSelectedServer(server.slug);
+                            localStorage.setItem("cc-selected-server", server.slug);
+                            setShowServerDropdown(false);
+                          }}
+                          className={`w-full px-3 py-2 text-xs text-left hover:bg-cc-hover transition-colors cursor-pointer flex items-center gap-1 ${
+                            server.slug === selectedServer ? "text-cc-primary font-medium" : "text-cc-fg"
+                          }`}
+                        >
+                          <span className="truncate">{server.name}</span>
+                          <span className="text-cc-muted ml-auto shrink-0 text-[10px]">
+                            {server.slug}
+                          </span>
+                        </button>
+                      ))}
+                      <div className="border-t border-cc-border mt-1 pt-1">
+                        <button
+                          onClick={() => {
+                            setShowServerDropdown(false);
+                            window.location.hash = "#/servers";
+                          }}
+                          className="w-full px-3 py-2 text-xs text-left text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
+                        >
+                          Manage servers...
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
             {/* Separator dot */}
             <span className="w-0.5 h-0.5 rounded-full bg-cc-muted/30 mx-0.5 hidden sm:block" />
 
-            {/* Folder selector */}
-            <div>
-              <button
-                onClick={() => setShowFolderPicker(true)}
-                className="flex items-center gap-1 px-2 py-1 text-[11px] sm:text-xs text-cc-muted hover:text-cc-fg rounded-lg hover:bg-cc-hover transition-colors cursor-pointer"
-              >
-                <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 opacity-50">
+            {/* Folder selector — text input for remote servers, picker for local */}
+            {selectedServer ? (
+              <div className="flex items-center gap-1 px-2 py-1">
+                <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 text-cc-muted opacity-50 shrink-0">
                   <path d="M1 3.5A1.5 1.5 0 012.5 2h3.379a1.5 1.5 0 011.06.44l.622.621a.5.5 0 00.353.146H13.5A1.5 1.5 0 0115 4.707V12.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 011 12.5v-9z" />
                 </svg>
-                <span className="max-w-[80px] sm:max-w-[140px] truncate font-mono-code">{dirLabel}</span>
-              </button>
-              {showFolderPicker && (
-                <FolderPicker
-                  initialPath={cwd || ""}
-                  onSelect={(path) => { setCwd(path); }}
-                  onClose={() => setShowFolderPicker(false)}
+                <input
+                  type="text"
+                  value={cwd}
+                  onChange={(e) => setCwd(e.target.value)}
+                  placeholder="~/Projects/my-app"
+                  className="w-[120px] sm:w-[180px] px-1.5 py-0.5 text-[11px] sm:text-xs font-mono-code bg-transparent text-cc-fg placeholder:text-cc-muted/50 border-b border-cc-border/50 focus:border-cc-primary/40 focus:outline-none transition-colors"
                 />
-              )}
-            </div>
+              </div>
+            ) : (
+              <div>
+                <button
+                  onClick={() => setShowFolderPicker(true)}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] sm:text-xs text-cc-muted hover:text-cc-fg rounded-lg hover:bg-cc-hover transition-colors cursor-pointer"
+                >
+                  <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 opacity-50">
+                    <path d="M1 3.5A1.5 1.5 0 012.5 2h3.379a1.5 1.5 0 011.06.44l.622.621a.5.5 0 00.353.146H13.5A1.5 1.5 0 0115 4.707V12.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 011 12.5v-9z" />
+                  </svg>
+                  <span className="max-w-[80px] sm:max-w-[140px] truncate font-mono-code">{dirLabel}</span>
+                </button>
+                {showFolderPicker && (
+                  <FolderPicker
+                    initialPath={cwd || ""}
+                    onSelect={(path) => { setCwd(path); }}
+                    onClose={() => setShowFolderPicker(false)}
+                  />
+                )}
+              </div>
+            )}
 
             {/* Branch picker */}
             <BranchPicker

@@ -509,4 +509,51 @@ describe("SessionItem", () => {
     );
     expect(container.querySelector(".bg-cc-success")).toBeTruthy();
   });
+
+  // --- Server badge (multi-server federation) ---
+
+  it("renders a server badge when serverSlug is set", () => {
+    // Validates that remote sessions show their server identity in the sidebar.
+    render(
+      <SessionItem
+        {...buildProps({
+          session: makeSession({ serverSlug: "pve-server", serverName: "PVE Server" }),
+        })}
+      />,
+    );
+    expect(screen.getByTitle("PVE Server")).toBeInTheDocument();
+    expect(screen.getByText("PVE")).toBeInTheDocument();
+  });
+
+  it("does not render a server badge when serverSlug is empty", () => {
+    // Validates that local sessions (no server affinity) show no badge.
+    render(<SessionItem {...buildProps()} />);
+    expect(screen.queryByText("PVE")).not.toBeInTheDocument();
+  });
+
+  it("assigns deterministic colors to server badges", () => {
+    // Validates that the same slug always gets the same color class.
+    const { container: c1 } = render(
+      <SessionItem
+        {...buildProps({
+          session: makeSession({ id: "s1", serverSlug: "gpu-server", serverName: "GPU Server" }),
+        })}
+      />,
+    );
+    const badge1 = c1.querySelector("[title='GPU Server']");
+    expect(badge1).toBeTruthy();
+
+    const { container: c2 } = render(
+      <SessionItem
+        {...buildProps({
+          session: makeSession({ id: "s2", serverSlug: "gpu-server", serverName: "GPU Server" }),
+        })}
+      />,
+    );
+    const badge2 = c2.querySelector("[title='GPU Server']");
+    expect(badge2).toBeTruthy();
+
+    // Same slug should produce the same class list
+    expect(badge1!.className).toBe(badge2!.className);
+  });
 });

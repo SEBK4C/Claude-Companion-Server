@@ -60,6 +60,40 @@ function StatusDot({ status }: { status: DerivedStatus }) {
   }
 }
 
+/** Deterministic color from a slug string — small palette of muted, accessible colors. */
+const SERVER_COLORS = [
+  "bg-violet-500/15 text-violet-400",
+  "bg-amber-500/15 text-amber-400",
+  "bg-cyan-500/15 text-cyan-400",
+  "bg-rose-500/15 text-rose-400",
+  "bg-lime-500/15 text-lime-400",
+  "bg-fuchsia-500/15 text-fuchsia-400",
+  "bg-teal-500/15 text-teal-400",
+  "bg-orange-500/15 text-orange-400",
+];
+
+function hashSlug(slug: string): number {
+  let hash = 0;
+  for (let i = 0; i < slug.length; i++) {
+    hash = ((hash << 5) - hash + slug.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function ServerBadge({ slug, name }: { slug: string; name: string }) {
+  const colorClass = SERVER_COLORS[hashSlug(slug) % SERVER_COLORS.length];
+  // Use a short label: first word, max 6 chars
+  const shortName = name.split(/[\s-]+/)[0].slice(0, 6);
+  return (
+    <span
+      className={`text-[9px] font-semibold px-1.5 py-0.5 rounded leading-none ${colorClass}`}
+      title={name}
+    >
+      {shortName}
+    </span>
+  );
+}
+
 function BackendBadge({ type }: { type: "claude" | "codex" }) {
   if (type === "codex") {
     return (
@@ -243,9 +277,10 @@ export function SessionItem({
           </div>
         )}
 
-        {/* Badges: backend type + Docker + Cron */}
+        {/* Badges: server + backend type + Docker + Cron */}
         {!isEditing && (
           <span className="flex items-center gap-1 shrink-0">
+            {s.serverSlug && <ServerBadge slug={s.serverSlug} name={s.serverName || s.serverSlug} />}
             <BackendBadge type={s.backendType} />
             {s.isContainerized && (
               <span className="flex items-center px-1 py-0.5 rounded bg-blue-400/10" title="Docker">

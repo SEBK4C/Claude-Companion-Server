@@ -113,6 +113,70 @@ export class TerminalManager {
     return id;
   }
 
+  /**
+   * Spawn an SSH terminal to a remote server via Tailscale.
+   * Returns the terminal ID — browser connects via /ws/terminal/:id as usual.
+   */
+  spawnSsh(sshUser: string, tailscaleHostname: string, cols = 80, rows = 24): string {
+    const id = randomUUID();
+    const sockets = new Set<ServerWebSocket<SocketData>>();
+    const cmd = ["ssh", "-t", "-o", "StrictHostKeyChecking=accept-new", `${sshUser}@${tailscaleHostname}`];
+
+    const proc = Bun.spawn(cmd, {
+      env: { ...process.env, TERM: "xterm-256color" },
+      terminal: {
+        cols,
+        rows,
+        data: (_terminal, data) => {
+          for (const ws of sockets) {
+            try {
+              ws.sendBinary(data);
+            } catch {
+              // socket may have closed
+            }
+          }
+        },
+        exit: () => {
+          const inst = this.instances.get(id);
+          if (inst) {
+            const exitMsg = JSON.stringify({ type: "exit", exitCode: proc.exitCode ?? 0 });
+            for (const ws of inst.browserSockets) {
+              try {
+                ws.send(exitMsg);
+              } catch {
+                // socket may have closed
+              }
+            }
+          }
+        },
+      },
+    });
+
+    const terminal = (proc as any).terminal as BunTerminalHandle;
+    this.instances.set(id, {
+      id,
+      cwd: "~",
+      proc,
+      terminal,
+      browserSockets: sockets,
+      cols,
+      rows,
+      orphanTimer: null,
+    });
+    console.log(
+      `[terminal] Spawned SSH terminal ${id} to ${sshUser}@${tailscaleHostname} (${cols}x${rows})`,
+    );
+
+    proc.exited.then((exitCode) => {
+      const inst = this.instances.get(id);
+      if (!inst) return;
+      console.log(`[terminal] SSH terminal ${id} exited with code ${exitCode}`);
+      this.cleanupInstance(id);
+    });
+
+    return id;
+  }
+
   private getTerminalIdFromSocket(ws: ServerWebSocket<SocketData>): string | null {
     const data = ws.data;
     if (data.kind !== "terminal") return null;
