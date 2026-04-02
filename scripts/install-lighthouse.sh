@@ -122,6 +122,18 @@ systemctl daemon-reload
 systemctl enable the-companion
 ok "Systemd service created and enabled"
 
+# ─── Tailscale serve ─────────────────────────────────────────────────────────
+
+if command -v tailscale &> /dev/null; then
+  info "Configuring Tailscale serve (HTTPS on port 443 -> localhost:${PORT})..."
+  tailscale serve --bg --https=443 "http://localhost:${PORT}" 2>/dev/null && \
+    ok "Tailscale serve enabled — accessible via https://$(tailscale status --self --json 2>/dev/null | grep -o '"DNSName":"[^"]*"' | cut -d'"' -f4 | sed 's/\.$//')" || \
+    warn "Tailscale serve setup failed — you can configure it manually: tailscale serve --https=443 http://localhost:${PORT}"
+else
+  warn "Tailscale not found — install it for HTTPS access across your tailnet"
+  echo "  See: https://tailscale.com/download/linux"
+fi
+
 # ─── Start the service ──────────────────────────────────────────────────────
 
 info "Starting the service..."
@@ -138,13 +150,18 @@ done
 # ─── Verify ─────────────────────────────────────────────────────────────────
 
 HEALTH=$(curl -sf "http://localhost:${PORT}/health" 2>/dev/null || echo "")
+TS_HOSTNAME=$(tailscale status --self --json 2>/dev/null | grep -o '"DNSName":"[^"]*"' | cut -d'"' -f4 | sed 's/\.$//' || echo "")
+
 if echo "$HEALTH" | grep -q '"ok":true'; then
   echo ""
   ok "=========================================="
   ok "  Lighthouse is running!"
   ok "=========================================="
   echo ""
-  echo "  URL:    http://localhost:${PORT}"
+  echo "  Local:  http://localhost:${PORT}"
+  if [[ -n "$TS_HOSTNAME" ]]; then
+    echo "  Tailscale: https://${TS_HOSTNAME}"
+  fi
   echo "  Health: ${HEALTH}"
   echo "  Token:  $(cat ~/.companion/auth.json 2>/dev/null | grep -o '"token":"[^"]*"' | cut -d'"' -f4)"
   echo ""
