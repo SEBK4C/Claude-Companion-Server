@@ -171,6 +171,11 @@ export function TopBar() {
                           : "bg-cc-success"
                   }`} />
                   Session
+                  {sdkSession?.serverName && (
+                    <span className="text-[10px] text-cc-muted font-normal ml-0.5 max-w-[60px] truncate" title={sdkSession.serverName}>
+                      · {sdkSession.serverName}
+                    </span>
+                  )}
               </button>
               <button
                 onClick={() => activateWorkspaceTab("diff")}

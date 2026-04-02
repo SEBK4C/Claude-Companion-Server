@@ -468,6 +468,8 @@ export function Sidebar() {
       cronJobName: bridgeState?.cronJobName || sdkInfo?.cronJobName,
       agentId: bridgeState?.agentId || sdkInfo?.agentId,
       agentName: bridgeState?.agentName || sdkInfo?.agentName,
+      serverSlug: sdkInfo?.serverSlug || "",
+      serverName: sdkInfo?.serverName || "",
     };
   }).sort((a, b) => b.createdAt - a.createdAt);
 

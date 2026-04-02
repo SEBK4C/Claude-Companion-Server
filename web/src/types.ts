@@ -109,4 +109,8 @@ export interface SdkSessionInfo {
   agentName?: string;
   /** Sandbox profile slug used for this session */
   sandboxSlug?: string;
+  /** Remote server slug (lighthouse mode) */
+  serverSlug?: string;
+  /** Remote server display name (lighthouse mode) */
+  serverName?: string;
 }

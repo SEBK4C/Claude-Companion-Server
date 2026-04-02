@@ -224,6 +224,7 @@ export interface CreateSessionOpts {
   backend?: "claude" | "codex";
   sandboxEnabled?: boolean;
   sandboxSlug?: string;
+  serverSlug?: string;
   container?: ContainerCreateOpts;
   resumeSessionAt?: string;
   forkSession?: boolean;
